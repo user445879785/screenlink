@@ -1,0 +1,233 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<title>ScreenLink</title>
+<style>
+html,body{margin:0;height:100%;background:#000;color:#eee;font:14px -apple-system,system-ui,sans-serif;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none}
+#wrap{position:fixed;left:0;top:0;right:0;bottom:0;overflow:hidden}
+#scr{position:absolute;left:0;top:0;transform-origin:0 0;pointer-events:none;-webkit-touch-callout:none;image-rendering:auto}
+#bar{position:fixed;left:0;right:0;bottom:0;display:flex;gap:6px;padding:6px 8px calc(6px + env(safe-area-inset-bottom));background:rgba(22,22,28,.88);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);overflow-x:auto;z-index:5;scrollbar-width:none}
+#bar::-webkit-scrollbar{display:none}
+#bar button{flex:0 0 auto;background:#2c2c35;color:#eee;border:0;border-radius:9px;padding:9px 11px;font-size:14px}
+#bar button.on{background:#4b6bff}
+#kb{position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;border:0;padding:0;font-size:16px}
+#msg{position:fixed;top:calc(10px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);background:rgba(0,0,0,.75);padding:7px 14px;border-radius:9px;z-index:6;display:none;white-space:nowrap}
+#pin{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:#0d0d12;z-index:9;flex-direction:column;gap:14px}
+#pin input{font-size:28px;text-align:center;width:200px;padding:10px;border-radius:10px;border:0;letter-spacing:4px}
+#pin button{font-size:18px;padding:10px 26px;border-radius:10px;border:0;background:#4b6bff;color:#fff}
+</style></head><body>
+<div id="wrap"><img id="scr" alt=""></div>
+<div id="msg"></div>
+<input id="kb" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" value=" ">
+<div id="bar">
+  <button id="bKb">⌨︎ Keys</button>
+  <button id="bBtn" title="What a one finger drag does">Drag: Left</button>
+  <button id="bWheel">2F: Zoom</button>
+  <button data-k="ctrl+s">Save</button>
+  <button data-k="esc">Esc</button>
+  <button data-k="enter">Enter</button>
+  <button data-k="backspace">⌫</button>
+  <button data-k="delete">Del</button>
+  <button data-k="ctrl+z">Undo</button>
+  <button data-k="ctrl+y">Redo</button>
+  <button data-k="ctrl+c">Copy</button>
+  <button data-k="ctrl+v">Paste</button>
+  <button data-k="tab">Tab</button>
+  <button data-k="alt+tab">Alt+Tab</button>
+  <button data-k="win">Start</button>
+  <button id="bFit">Fit</button>
+  <button id="bMon">Screen 1</button>
+  <button id="bQ">Quality: High</button>
+</div>
+<div id="pin"><div>Enter the PIN shown on the PC</div><input id="pinIn" inputmode="numeric" pattern="[0-9]*"><button id="pinGo">Connect</button></div>
+<script>
+(function(){
+const $=id=>document.getElementById(id);
+const scr=$('scr'),wrap=$('wrap'),bar=$('bar'),kb=$('kb'),msg=$('msg');
+const params=new URLSearchParams(location.search);
+let pin=params.get('k')||localStorage.getItem('sl_pin')||'';
+if(params.get('k'))localStorage.setItem('sl_pin',pin);
+let mon=0,monCount=1;
+const QUAL=[['High',1920,70],['Medium',1440,60],['Low',1024,45],['Max',2560,82]];
+let qi=+(localStorage.getItem('sl_q')||0)%QUAL.length;
+const BTNS=[['Left','l'],['Right','r'],['Middle','m'],['Hover',null]];
+let bi=0;
+let wheelMode=false;
+let s=1,tx=0,ty=0,iw=0,ih=0;
+
+function toast(t,ms){msg.textContent=t;msg.style.display='block';clearTimeout(toast.t);if(ms!==0)toast.t=setTimeout(()=>msg.style.display='none',ms||1500);}
+function hideToast(){msg.style.display='none';}
+
+// ---------- view transform
+function viewH(){return window.innerHeight-bar.offsetHeight;}
+function apply(){scr.style.transform=`translate(${tx}px,${ty}px) scale(${s})`;}
+function fit(){if(!iw)return;const W=window.innerWidth,H=viewH();s=Math.min(W/iw,H/ih);tx=(W-iw*s)/2;ty=(H-ih*s)/2;apply();}
+function clampView(){const W=window.innerWidth,H=viewH();const w=iw*s,h=ih*s;
+  tx=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,tx));ty=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,ty));}
+window.addEventListener('resize',()=>setTimeout(fit,150));
+function norm(cx,cy){return{x:Math.max(0,Math.min(1,(cx-tx)/s/iw)),y:Math.max(0,Math.min(1,(cy-ty)/s/ih))};}
+
+// ---------- frames
+let prevUrl=null,failing=false;
+async function loop(){
+  for(;;){
+    if(!pin){askPin();return;}
+    const q=QUAL[qi];
+    try{
+      const r=await fetch(`/frame?k=${encodeURIComponent(pin)}&m=${mon}&w=${q[1]}&q=${q[2]}&t=${Date.now()}`,{cache:'no-store'});
+      if(r.status===401){pin='';localStorage.removeItem('sl_pin');askPin('Wrong PIN');return;}
+      if(!r.ok){toast('PC screen unavailable (locked?)',0);await sleep(1000);continue;}
+      const b=await r.blob();const u=URL.createObjectURL(b);
+      await new Promise(res=>{scr.onload=res;scr.onerror=res;scr.src=u;});
+      if(prevUrl)URL.revokeObjectURL(prevUrl);prevUrl=u;
+      if(scr.naturalWidth&&(scr.naturalWidth!==iw||scr.naturalHeight!==ih)){
+        const first=!iw;const oldW=iw;iw=scr.naturalWidth;ih=scr.naturalHeight;
+        if(first)fit();else{s=s*oldW/iw;clampView();apply();}
+      }
+      if(failing){failing=false;hideToast();}
+    }catch(e){failing=true;toast('Reconnecting…',0);await sleep(1000);}
+  }
+}
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+
+function askPin(why){$('pin').style.display='flex';if(why)toast(why);setTimeout(()=>$('pinIn').focus(),100);}
+$('pinGo').onclick=()=>{pin=$('pinIn').value.trim();localStorage.setItem('sl_pin',pin);$('pin').style.display='none';start();};
+$('pinIn').addEventListener('keydown',e=>{if(e.key==='Enter')$('pinGo').click();});
+
+async function start(){
+  try{const r=await fetch(`/info?k=${encodeURIComponent(pin)}`,{cache:'no-store'});
+    if(r.status===401){pin='';localStorage.removeItem('sl_pin');return askPin('Wrong PIN');}
+    const j=await r.json();monCount=j.monitors.length;document.title=j.name+' · ScreenLink';}catch(e){}
+  updMon();loop();
+}
+
+// ---------- input queue (in order, batched)
+let queue=[],sending=false;
+function send(ev){
+  if(ev.t==='move'&&queue.length&&queue[queue.length-1].t==='move')queue[queue.length-1]=ev;else queue.push(ev);
+  if(!sending)flush();
+}
+async function flush(){
+  sending=true;
+  while(queue.length){
+    const batch=queue;queue=[];
+    try{await fetch(`/input?k=${encodeURIComponent(pin)}&m=${mon}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(batch)});}catch(e){}
+  }
+  sending=false;
+}
+
+// ---------- touch
+const touches={};
+let g=null; // gesture state
+function pts(e){return Array.from(e.touches).map(t=>({x:t.clientX,y:t.clientY}));}
+function center(p){return{x:(p[0].x+p[1].x)/2,y:(p[0].y+p[1].y)/2};}
+function dist(p){return Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y);}
+
+wrap.addEventListener('touchstart',e=>{
+  e.preventDefault();
+  if(!iw)return;
+  const p=pts(e);
+  if(p.length===1&&!g){
+    g={kind:'one',sx:p[0].x,sy:p[0].y,x:p[0].x,y:p[0].y,t:Date.now(),moved:false,dragging:false};
+    g.hold=setTimeout(()=>{if(g&&g.kind==='one'&&!g.moved){g.kind='done';const n=norm(g.x,g.y);send({t:'click',b:'r',x:n.x,y:n.y});toast('Right click',700);if(navigator.vibrate)navigator.vibrate(15);}},550);
+  }else if(p.length===2){
+    if(g&&g.kind==='one'){clearTimeout(g.hold);if(g.dragging)endDrag();}
+    const c=center(p);
+    g={kind:'two',c0:c,c:c,d0:dist(p),s0:s,tx0:tx,ty0:ty,t:Date.now(),moved:false,acc:0};
+    if(wheelMode){const n=norm(c.x,c.y);send({t:'move',x:n.x,y:n.y});}
+  }
+},{passive:false});
+
+function endDrag(){const n=norm(g.x,g.y);const b=BTNS[bi][1];if(b)send({t:'up',b,x:n.x,y:n.y});g.dragging=false;}
+
+wrap.addEventListener('touchmove',e=>{
+  e.preventDefault();
+  if(!g)return;
+  const p=pts(e);
+  if(g.kind==='one'&&p.length===1){
+    g.x=p[0].x;g.y=p[0].y;
+    if(!g.moved&&Math.hypot(g.x-g.sx,g.y-g.sy)>9){
+      g.moved=true;clearTimeout(g.hold);
+      const n=norm(g.sx,g.sy);const b=BTNS[bi][1];
+      send({t:'move',x:n.x,y:n.y});
+      if(b)send({t:'down',b,x:n.x,y:n.y});
+      g.dragging=true;
+    }
+    if(g.dragging){const n=norm(g.x,g.y);send({t:'move',x:n.x,y:n.y});}
+  }else if(g.kind==='two'&&p.length===2){
+    const c=center(p);
+    if(Math.hypot(c.x-g.c0.x,c.y-g.c0.y)>8||Math.abs(dist(p)-g.d0)>12)g.moved=true;
+    if(wheelMode){
+      g.acc+=(g.c.y-c.y);g.c=c;
+      while(Math.abs(g.acc)>=24){const d=g.acc>0?120:-120;send({t:'wheel',d});g.acc-=g.acc>0?24:-24;}
+    }else{
+      const ns=Math.max(0.2,Math.min(12,g.s0*dist(p)/g.d0));
+      // keep the image point under the first center under the current center
+      const ix=(g.c0.x-g.tx0)/g.s0,iy=(g.c0.y-g.ty0)/g.s0;
+      s=ns;tx=c.x-ix*s;ty=c.y-iy*s;clampView();apply();
+    }
+  }
+},{passive:false});
+
+wrap.addEventListener('touchend',e=>{
+  e.preventDefault();
+  if(!g)return;
+  if(g.kind==='one'){
+    clearTimeout(g.hold);
+    if(g.dragging)endDrag();
+    else if(!g.moved){const n=norm(g.x,g.y);const b=BTNS[bi][1];
+      if(b===null)send({t:'move',x:n.x,y:n.y});else send({t:'click',b:b==='m'?'l':b,x:n.x,y:n.y});}
+    g=null;
+  }else if(g.kind==='two'){
+    if(e.touches.length===0){
+      if(!g.moved&&Date.now()-g.t<300){const n=norm(g.c0.x,g.c0.y);send({t:'click',b:'r',x:n.x,y:n.y});toast('Right click',700);}
+      g=null;
+    }
+  }else if(e.touches.length===0)g=null;
+},{passive:false});
+wrap.addEventListener('touchcancel',()=>{if(g&&g.dragging)endDrag();g=null;});
+
+// mouse support (testing on a computer)
+wrap.addEventListener('mousedown',e=>{if(!iw)return;const n=norm(e.clientX,e.clientY);send({t:'down',b:['l','m','r'][e.button]||'l',x:n.x,y:n.y});});
+wrap.addEventListener('mouseup',e=>{if(!iw)return;const n=norm(e.clientX,e.clientY);send({t:'up',b:['l','m','r'][e.button]||'l',x:n.x,y:n.y});});
+wrap.addEventListener('mousemove',e=>{if(!iw||!e.buttons)return;const n=norm(e.clientX,e.clientY);send({t:'move',x:n.x,y:n.y});});
+wrap.addEventListener('contextmenu',e=>e.preventDefault());
+wrap.addEventListener('wheel',e=>{e.preventDefault();const n=norm(e.clientX,e.clientY);send({t:'move',x:n.x,y:n.y});send({t:'wheel',d:e.deltaY>0?-120:120});},{passive:false});
+
+// ---------- keyboard
+function resetKb(){kb.value=' ';try{kb.setSelectionRange(1,1);}catch(e){}}
+$('bKb').onclick=()=>{if(document.activeElement===kb){kb.blur();}else{resetKb();kb.focus();}};
+kb.addEventListener('beforeinput',e=>{
+  const t=e.inputType;
+  if(t==='insertText'||t==='insertReplacementText'){if(e.data)send({t:'text',s:e.data});}
+  else if(t==='deleteContentBackward')send({t:'key',k:'backspace'});
+  else if(t==='insertLineBreak'||t==='insertParagraph')send({t:'key',k:'enter'});
+  else return;
+  e.preventDefault();
+});
+kb.addEventListener('input',resetKb);
+kb.addEventListener('keydown',e=>{
+  const map={Enter:'enter',Backspace:'backspace',Tab:'tab',Escape:'esc',ArrowLeft:'left',ArrowRight:'right',ArrowUp:'up',ArrowDown:'down',Delete:'delete'};
+  if(map[e.key]&&e.key!=='Backspace'&&e.key!=='Enter'){e.preventDefault();send({t:'key',k:map[e.key]});}
+  else if(e.ctrlKey||e.metaKey){if(e.key.length===1){e.preventDefault();send({t:'key',k:'ctrl+'+e.key.toLowerCase()});}}
+});
+bar.addEventListener('click',e=>{const k=e.target.dataset&&e.target.dataset.k;if(k){send({t:'key',k});toast(e.target.textContent,600);}});
+
+// ---------- buttons
+function updBtn(){$('bBtn').textContent='Drag: '+BTNS[bi][0];$('bBtn').classList.toggle('on',bi!==0);}
+$('bBtn').onclick=()=>{bi=(bi+1)%BTNS.length;updBtn();
+  toast({Left:'Drag selects/moves',Right:'Drag with right button',Middle:'Drag pans (Revit, AutoCAD)',Hover:'Tap only moves the pointer'}[BTNS[bi][0]],1400);};
+$('bWheel').onclick=()=>{wheelMode=!wheelMode;$('bWheel').textContent=wheelMode?'2F: Wheel':'2F: Zoom';$('bWheel').classList.toggle('on',wheelMode);
+  toast(wheelMode?'Two fingers up/down = mouse wheel':'Two fingers pinch = zoom this view',1400);};
+$('bFit').onclick=fit;
+function updMon(){$('bMon').textContent='Screen '+(mon+1)+'/'+monCount;$('bMon').style.display=monCount>1?'':'none';}
+$('bMon').onclick=()=>{mon=(mon+1)%monCount;iw=0;updMon();};
+function updQ(){$('bQ').textContent='Quality: '+QUAL[qi][0];}
+$('bQ').onclick=()=>{qi=(qi+1)%QUAL.length;localStorage.setItem('sl_q',qi);updQ();};
+updBtn();updQ();
+start();
+})();
+</script>
+</body></html>

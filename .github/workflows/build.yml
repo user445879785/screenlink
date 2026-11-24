@@ -1,0 +1,84 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  ipa:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Build the iPhone app (unsigned; sign it with ipakill or Sideloadly)
+        working-directory: ios
+        run: |
+          set -o pipefail
+          xcodegen generate
+          xcodebuild -project ScreenLink.xcodeproj -scheme ScreenLink -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build | tail -n 60
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/ScreenLink.app Payload/
+          zip -qry ScreenLink.ipa Payload
+          ls -la ScreenLink.ipa
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ipa
+          path: ios/ScreenLink.ipa
+          if-no-files-found: error
+
+  exe:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build the Windows app
+        shell: bash
+        working-directory: pc
+        run: |
+          python -m pip install --quiet mss pillow pyinstaller
+          python -m PyInstaller --noconfirm --onefile --windowed --name ScreenLink-PC \
+            --add-data "viewer.html;." screenlink.py
+          ls -la dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: exe
+          path: pc/dist/ScreenLink-PC.exe
+          if-no-files-found: error
+
+  release:
+    if: github.ref == 'refs/heads/main'
+    needs: [ipa, exe]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: art
+      - name: Publish the release (every file ends with its version)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V="$(tr -d ' \n' < VERSION)"
+          TAG="v$V"
+          mkdir -p dist
+          cp art/ipa/ScreenLink.ipa "dist/ScreenLink-$V.ipa"
+          cp art/exe/ScreenLink-PC.exe "dist/ScreenLink-PC-$V.exe"
+          FILES="dist/ScreenLink-$V.ipa dist/ScreenLink-PC-$V.exe"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" $FILES --clobber
+            gh release edit "$TAG" --notes-file RELEASE_NOTES.md
+          else
+            gh release create "$TAG" $FILES --target "$GITHUB_SHA" \
+              --title "ScreenLink $TAG" --notes-file RELEASE_NOTES.md --latest
+          fi

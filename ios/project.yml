@@ -1,0 +1,40 @@
+name: ScreenLink
+options:
+  bundleIdPrefix: app.screenlink
+  deploymentTarget:
+    iOS: "16.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  ScreenLink:
+    type: application
+    platform: iOS
+    sources: [ScreenLink]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.screenlink.viewer
+        TARGETED_DEVICE_FAMILY: "1,2"
+    info:
+      path: ScreenLink/Info.plist
+      properties:
+        CFBundleDisplayName: ScreenLink
+        UILaunchScreen: {}
+        UIRequiresFullScreen: true
+        UIStatusBarHidden: true
+        UIViewControllerBasedStatusBarAppearance: false
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        NSLocalNetworkUsageDescription: ScreenLink looks for your PC on this Wi-Fi or hotspot to show its screen.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+          NSAllowsLocalNetworking: true
